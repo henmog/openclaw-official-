@@ -416,3 +416,6 @@ HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway"]
+RUN mkdir -p /home/node/.openclaw && \
+    echo '{"gateway":{"mode":"local","bind":"lan","port":10000,"trustedProxies":["127.0.0.1","::1"],"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}' > /home/node/.openclaw/openclaw.json && \
+    chown -R node:node /home/node/.openclaw
