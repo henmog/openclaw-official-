@@ -9,11 +9,9 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@s
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03"
 ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4"
 
-# ── Stage 1: Workspace dependencies ─────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
-
 COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
 COPY scripts/lib/root-package-bundled-plugin-excludes.mjs /tmp/root-package-bundled-plugin-excludes.mjs
 COPY package.json /tmp/package.json
@@ -50,7 +48,6 @@ ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB
 ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS
 
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
-
 RUN corepack enable
 
 WORKDIR /app
@@ -131,7 +128,14 @@ RUN set -eu; \
     OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS="$selected_plugin_dirs" OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker; \
     pnpm_config_verify_deps_before_run=false pnpm ui:build
 
-# ── Stage 3: Runtime Assets ─────────────────────────────────────
+RUN if grep -qx 'qa-lab' /tmp/openclaw-selected-plugin-dirs; then \
+      pnpm_config_verify_deps_before_run=false pnpm qa:lab:build && \
+      mkdir -p dist/extensions/qa-lab/web && \
+      rm -rf dist/extensions/qa-lab/web/dist && \
+      cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist; \
+    fi
+
+# ── Stage: Runtime Assets ───────────────────────────────────────
 FROM build AS runtime-assets
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
@@ -164,13 +168,13 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     node --input-type=module -e 'await import("grammy")' && \
     node scripts/check-package-dist-imports.mjs /app
 
-# ── Stage 4: Runtime base ───────────────────────────────────────
+# ── Runtime base image ──────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
-# ── Stage 5: Final Runtime ──────────────────────────────────────
+# ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 
@@ -221,29 +225,35 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
     done && \
     chmod -R a+rX "$COREPACK_HOME"
 
+ARG OPENCLAW_IMAGE_APT_PACKAGES
+ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 ENV PATH="/home/node/.local/bin:${PATH}"
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    packages="${OPENCLAW_IMAGE_APT_PACKAGES:-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
+    if [ -n "$packages" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages; \
+    fi
 
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# 1. Pre-create configuration directories with proper node ownership
+# Pre-create directory and default config with trusted proxies
 RUN install -d -m 0755 -o node -g node /home/node/.config && \
     install -d -m 0700 -o node -g node \
       /home/node/.openclaw \
       /home/node/.openclaw/workspace \
-      /home/node/.config/openclaw
+      /home/node/.config/openclaw && \
+    echo '{"gateway":{"mode":"local","bind":"lan","port":10000,"trustedProxies":["127.0.0.1","::1"],"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true}}}' > /home/node/.openclaw/openclaw.json && \
+    chown -R node:node /home/node/.openclaw /home/node/.config
 
-# 2. Write baseline openclaw.json with trusted proxies and permissive origin settings
-RUN echo '{"gateway":{"mode":"local","bind":"lan","port":10000,"trustedProxies":["127.0.0.1","::1"],"controlUi":{"allowInsecureAuth":true,"dangerouslyAllowHostHeaderOriginFallback":true,"allowedOrigins":["*"]}}}' > /home/node/.openclaw/openclaw.json && \
-    chown -R node:node /home/node/.openclaw && \
-    chmod 644 /home/node/.openclaw/openclaw.json
-
-# 3. Create the auto-approval entrypoint script
-RUN echo '#!/bin/sh' > /app/entrypoint.sh && \
-    echo '(while true; do node /app/openclaw.mjs devices approve --latest 2>/dev/null || true; sleep 2; done) &' >> /app/entrypoint.sh && \
-    echo 'exec node /app/openclaw.mjs gateway run' >> /app/entrypoint.sh && \
-    chmod +x /app/entrypoint.sh && \
-    chown node:node /app/entrypoint.sh
+# Create auto-approval daemon entrypoint script
+RUN echo '#!/bin/sh' > /app/docker-entrypoint.sh && \
+    echo '(while true; do node /app/openclaw.mjs devices approve --latest >/dev/null 2>&1 || true; sleep 2; done) &' >> /app/docker-entrypoint.sh && \
+    echo 'exec node /app/openclaw.mjs gateway run "$@"' >> /app/docker-entrypoint.sh && \
+    chmod +x /app/docker-entrypoint.sh && \
+    chown node:node /app/docker-entrypoint.sh
 
 ENV NODE_ENV=production
 
@@ -251,6 +261,5 @@ USER node
 
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD ["node", "dist/docker-healthcheck.js"]
-
 ENTRYPOINT ["tini", "-s", "--"]
-CMD ["/app/entrypoint.sh"]
+CMD ["/app/docker-entrypoint.sh"]
