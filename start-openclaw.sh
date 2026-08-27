@@ -1,27 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -e
 
-# Default port to Render PORT or fallback to 10000
-PORT="${PORT:-${OPENCLAW_GATEWAY_PORT:-10000}}"
-STATE_DIR="${OPENCLAW_STATE_DIR:-/data/.openclaw}"
-WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}"
+PORT=${PORT:-10000}
+GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-"openclaw-admin-token"}
+CONFIG_DIR="/data/.openclaw"
 
-echo "=== Starting OpenClaw Gateway on port ${PORT} ==="
+mkdir -p "$CONFIG_DIR" "/data/workspace" "/home/node/.openclaw"
 
-# Ensure directories exist
-mkdir -p "${STATE_DIR}" "${WORKSPACE_DIR}"
-
-# Generate openclaw.json if not present or configure network bindings
-CONFIG_FILE="${STATE_DIR}/openclaw.json"
-
-if [ ! -f "${CONFIG_FILE}" ]; then
-  echo "Creating initial gateway configuration at ${CONFIG_FILE}..."
-  cat <<EOF > "${CONFIG_FILE}"
+# Generate or update openclaw.json with allowedOrigins, trustedProxies, and auth token
+cat <<EOF > "$CONFIG_DIR/openclaw.json"
 {
   "gateway": {
     "mode": "local",
     "bind": "lan",
-    "port": ${PORT},
+    "port": $PORT,
     "trustedProxies": [
       "127.0.0.1",
       "::1",
@@ -29,22 +21,32 @@ if [ ! -f "${CONFIG_FILE}" ]; then
       "172.16.0.0/12",
       "192.168.0.0/16"
     ],
+    "auth": {
+      "mode": "token",
+      "token": "$GATEWAY_TOKEN"
+    },
     "controlUi": {
-      "allowInsecureAuth": true,
-      "dangerouslyDisableDeviceAuth": true,
+      "enabled": true,
       "allowedOrigins": [
+        "https://openclaw-official.onrender.com",
+        "https://*.onrender.com",
+        "http://localhost:$PORT",
+        "http://127.0.0.1:$PORT",
         "*"
-      ]
+      ],
+      "dangerouslyAllowHostHeaderOriginFallback": true,
+      "dangerouslyDisableDeviceAuth": true,
+      "allowInsecureAuth": true
     }
   }
 }
 EOF
-fi
 
-# Ensure user node owns the persistent state directory if running as root
-if [ "$(id -u)" = "0" ]; then
-  chown -R node:node /data /home/node 2>/dev/null || true
-  exec su node -c "openclaw gateway --allow-unconfigured --port ${PORT} --bind lan"
-else
-  exec openclaw gateway --allow-unconfigured --port "${PORT}" --bind lan
-fi
+# Ensure the node user directory shares the same config
+cp "$CONFIG_DIR/openclaw.json" /home/node/.openclaw/openclaw.json 2>/dev/null || true
+chown -R node:node /data /home/node 2>/dev/null || true
+
+echo "=== Starting OpenClaw Gateway on port $PORT ==="
+echo "=== Gateway Token configured ==="
+
+exec openclaw gateway run --port "$PORT" --bind lan
