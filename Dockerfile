@@ -1,23 +1,37 @@
-FROM node:22-slim
+FROM node:22-bookworm-slim
 
-# 1. System Dependencies
+# Set environment variables
+ENV NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    NODE_OPTIONS="--max-old-space-size=2048" \
+    OPENCLAW_STATE_DIR=/data/.openclaw \
+    OPENCLAW_WORKSPACE_DIR=/data/workspace \
+    PORT=10000
+
+# Install required system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git openssh-client build-essential python3 python3-pip \
-    g++ make ca-certificates curl && rm -rf /var/lib/apt/lists/*
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    tini \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir huggingface_hub --break-system-packages
+# Install OpenClaw globally via npm
+RUN npm install -g openclaw@latest
 
-# 2. Install OpenClaw
-RUN npm install -g openclaw@latest --unsafe-perm
+# Prepare persistent data and config directories
+RUN mkdir -p /data/.openclaw /data/workspace /home/node/.openclaw \
+    && chown -R node:node /data /home/node
 
-# 3. Workdir & Entrypoint
-WORKDIR /app
-COPY sync.py .
-COPY start-openclaw.sh .
-RUN chmod +x start-openclaw.sh
+# Copy startup script
+COPY start-openclaw.sh /usr/local/bin/start-openclaw.sh
+RUN chmod +x /usr/local/bin/start-openclaw.sh
 
-# 4. Port Configuration (Render dynamically assigns PORT)
-ENV PORT=10000 HOME=/root
+# Expose Render service port
 EXPOSE 10000
 
-CMD ["./start-openclaw.sh"]
+# Run with tini to handle signals and zombie processes properly
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/usr/local/bin/start-openclaw.sh"]
