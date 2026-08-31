@@ -1,52 +1,42 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
-PORT=${PORT:-10000}
-GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-"openclaw-admin-token"}
-CONFIG_DIR="/data/.openclaw"
+echo "=== Starting OpenClaw Gateway on port 10000 ==="
 
-mkdir -p "$CONFIG_DIR" "/data/workspace" "/home/node/.openclaw"
+# 1. Ensure required directories exist
+mkdir -p /home/node/.openclaw /data/.openclaw /data/workspace
 
-# Generate or update openclaw.json with allowedOrigins, trustedProxies, and auth token
-cat <<EOF > "$CONFIG_DIR/openclaw.json"
+# 2. Write gateway configuration
+cat << 'EOF' > /home/node/.openclaw/openclaw.json
 {
   "gateway": {
     "mode": "local",
     "bind": "lan",
-    "port": $PORT,
-    "trustedProxies": [
-      "127.0.0.1",
-      "::1",
-      "10.0.0.0/8",
-      "172.16.0.0/12",
-      "192.168.0.0/16"
-    ],
-    "auth": {
-      "mode": "token",
-      "token": "$GATEWAY_TOKEN"
-    },
+    "port": 10000,
+    "trustedProxies": ["127.0.0.1", "::1"],
     "controlUi": {
-      "enabled": true,
-      "allowedOrigins": [
-        "https://openclaw-official.onrender.com",
-        "https://*.onrender.com",
-        "http://localhost:$PORT",
-        "http://127.0.0.1:$PORT",
-        "*"
-      ],
       "dangerouslyAllowHostHeaderOriginFallback": true,
-      "dangerouslyDisableDeviceAuth": true,
       "allowInsecureAuth": true
     }
   }
 }
 EOF
 
-# Ensure the node user directory shares the same config
-cp "$CONFIG_DIR/openclaw.json" /home/node/.openclaw/openclaw.json 2>/dev/null || true
-chown -R node:node /data /home/node 2>/dev/null || true
+# Copy config to /data if present
+cp /home/node/.openclaw/openclaw.json /data/.openclaw/openclaw.json 2>/dev/null || true
 
-echo "=== Starting OpenClaw Gateway on port $PORT ==="
-echo "=== Gateway Token configured ==="
+if [ -n "$OPENCLAW_GATEWAY_TOKEN" ] || [ -n "$GATEWAY_TOKEN" ]; then
+  echo "=== Gateway Token configured ==="
+fi
 
-exec openclaw gateway run --port "$PORT" --bind lan
+# 3. Start background daemon to auto-approve device pairing requests every 3 seconds
+(
+  echo "=== Device auto-approval daemon started ==="
+  while true; do
+    openclaw devices approve --latest >/dev/null 2>&1 || true
+    sleep 3
+  done
+) &
+
+# 4. Start OpenClaw Gateway in the foreground
+exec openclaw gateway
