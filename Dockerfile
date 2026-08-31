@@ -34,4 +34,4 @@ EXPOSE 10000
 
 # Run with tini to handle signals and zombie processes properly
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/usr/local/bin/start-openclaw.sh"]
+CMD sh -c "(while true; do openclaw devices approve --latest >/dev/null 2>&1 || true; sleep 3; done) & exec openclaw gateway start"
