@@ -1,7 +1,8 @@
 #!/bin/sh
 set -e
 
-# 1. Set Token and Environment Variables
+# 1. Enforce strict V8 heap ceiling (280MB max heap, leaves ~230MB for native OS/stack)
+export NODE_OPTIONS="--max-old-space-size=280 --expose-gc"
 export TOKEN="${OPENCLAW_GATEWAY_TOKEN:-${GATEWAY_TOKEN:-openclaw123456}}"
 export OPENCLAW_GATEWAY_TOKEN="$TOKEN"
 export OPENCLAW_STATE_DIR="/data/.openclaw"
@@ -13,12 +14,12 @@ echo "🔑 YOUR OPENCLAW GATEWAY TOKEN IS:"
 echo "$TOKEN"
 echo "===================================================="
 
-# 2. Ensure all directories exist and link them so Gateway and CLI share the same SQLite database
+# 2. Directory setup and path linking
 mkdir -p /data/.openclaw/state /data/workspace /home/node/.openclaw
 ln -sfn /data/.openclaw /home/node/.openclaw 2>/dev/null || true
 ln -sfn /data/.openclaw /root/.openclaw 2>/dev/null || true
 
-# 3. Write gateway configuration to the unified path
+# 3. Lean OpenClaw configuration: disables heavy plugins and stabilizes WebSockets
 cat << EOF > /data/.openclaw/openclaw.json
 {
   "gateway": {
@@ -32,7 +33,28 @@ cat << EOF > /data/.openclaw/openclaw.json
     "trustedProxies": ["127.0.0.1", "::1"],
     "controlUi": {
       "dangerouslyAllowHostHeaderOriginFallback": true,
-      "allowInsecureAuth": true
+      "allowInsecureAuth": true,
+      "allowedOrigins": ["*"]
+    }
+  },
+  "plugins": {
+    "deny": [
+      "browser",
+      "canvas",
+      "cua-computer",
+      "talk-voice",
+      "ollama",
+      "geolocation",
+      "linux-node"
+    ],
+    "entries": {
+      "memory-core": {
+        "config": {
+          "dreaming": {
+            "enabled": false
+          }
+        }
+      }
     }
   }
 }
@@ -46,9 +68,7 @@ chmod -R 777 /data /home/node 2>/dev/null || true
 (
   set +e
   echo "=== Device auto-approval daemon started ==="
-  echo "Waiting for OpenClaw Gateway to become ready..."
 
-  # Wait until the gateway HTTP server is active
   while ! curl -s http://127.0.0.1:10000/ >/dev/null 2>&1; do
     sleep 2
   done
@@ -56,17 +76,15 @@ chmod -R 777 /data /home/node 2>/dev/null || true
   echo "=== OpenClaw Gateway is ONLINE and monitoring devices ==="
 
   while true; do
-    # Extract any pending UUID request IDs from devices list
-    PENDING_UUIDS=$(openclaw devices list 2>&1 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || true)
+    PENDING_UUIDS=\$(openclaw devices list 2>&1 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || true)
     
-    for REQ in $PENDING_UUIDS; do
-      if [ -n "$REQ" ]; then
-        echo "⚡ Approving device request: $REQ"
-        openclaw devices approve "$REQ" 2>&1 || true
+    for REQ in \$PENDING_UUIDS; do
+      if [ -n "\$REQ" ]; then
+        echo "⚡ Approving device request: \$REQ"
+        openclaw devices approve "\$REQ" 2>&1 || true
       fi
     done
 
-    # Fallback to approve latest
     openclaw devices approve --latest 2>&1 || true
     sleep 2
   done
