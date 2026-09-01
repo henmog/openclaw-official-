@@ -4,18 +4,22 @@ set -e
 # 1. Set Token and Environment Variables
 export TOKEN="${OPENCLAW_GATEWAY_TOKEN:-${GATEWAY_TOKEN:-openclaw123456}}"
 export OPENCLAW_GATEWAY_TOKEN="$TOKEN"
-export OPENCLAW_CONFIG_PATH="/home/node/.openclaw/openclaw.json"
+export OPENCLAW_STATE_DIR="/data/.openclaw"
+export OPENCLAW_CONFIG_PATH="/data/.openclaw/openclaw.json"
+export HOME="/data"
 
 echo "===================================================="
 echo "🔑 YOUR OPENCLAW GATEWAY TOKEN IS:"
 echo "$TOKEN"
 echo "===================================================="
 
-# 2. Ensure required directories exist
-mkdir -p /home/node/.openclaw /data/.openclaw /data/workspace
+# 2. Ensure all directories exist and link them so Gateway and CLI share the same SQLite database
+mkdir -p /data/.openclaw/state /data/workspace /home/node/.openclaw
+ln -sfn /data/.openclaw /home/node/.openclaw 2>/dev/null || true
+ln -sfn /data/.openclaw /root/.openclaw 2>/dev/null || true
 
-# 3. Write gateway configuration
-cat << EOF > /home/node/.openclaw/openclaw.json
+# 3. Write gateway configuration to the unified path
+cat << EOF > /data/.openclaw/openclaw.json
 {
   "gateway": {
     "mode": "local",
@@ -34,42 +38,37 @@ cat << EOF > /home/node/.openclaw/openclaw.json
 }
 EOF
 
-# Copy config to /data if present
-cp /home/node/.openclaw/openclaw.json /data/.openclaw/openclaw.json 2>/dev/null || true
+# Copy config to /home/node as backup
+cp /data/.openclaw/openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
+chmod -R 777 /data /home/node 2>/dev/null || true
 
-# 4. Background daemon that waits for gateway readiness and auto-approves devices
+# 4. Background daemon: monitors pending UUIDs and approves them automatically
 (
   set +e
   echo "=== Device auto-approval daemon started ==="
-  echo "Waiting for OpenClaw Gateway to listen on port 10000..."
+  echo "Waiting for OpenClaw Gateway to become ready..."
 
-  # Wait until the gateway HTTP server is actually responding
+  # Wait until the gateway HTTP server is active
   while ! curl -s http://127.0.0.1:10000/ >/dev/null 2>&1; do
     sleep 2
   done
 
-  echo "=== OpenClaw Gateway is ONLINE ==="
-  sleep 2
+  echo "=== OpenClaw Gateway is ONLINE and monitoring devices ==="
 
-  # Output the direct pairing URL to Render logs
-  echo "=================================================================="
-  echo "🔗 DIRECT DASHBOARD PAIRING LINK (ONE-CLICK LOGIN):"
-  openclaw dashboard --no-open 2>&1 || true
-  echo "=================================================================="
-
-  # Continuous loop to approve every pending device ID
   while true; do
-    PENDING_IDS=$(openclaw devices list --json 2>/dev/null | jq -r '(.pending[]?.requestId // empty, .requests[]?.id // empty, .[]?.requestId // empty)' 2>/dev/null || true)
-    for ID in $PENDING_IDS; do
-      if [ -n "$ID" ] && [ "$ID" != "null" ]; then
-        echo "Approving device request ID: $ID"
-        openclaw devices approve "$ID" 2>&1 || true
+    # Extract any pending UUID request IDs from devices list
+    PENDING_UUIDS=$(openclaw devices list 2>&1 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || true)
+    
+    for REQ in $PENDING_UUIDS; do
+      if [ -n "$REQ" ]; then
+        echo "⚡ Approving device request: $REQ"
+        openclaw devices approve "$REQ" 2>&1 || true
       fi
     done
 
     # Fallback to approve latest
-    openclaw devices approve --latest 2>/dev/null || true
-    sleep 3
+    openclaw devices approve --latest 2>&1 || true
+    sleep 2
   done
 ) &
 
