@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
 # 1. Enforce strict V8 heap ceiling (280MB max heap, leaves ~230MB for native OS/stack)
@@ -20,7 +20,7 @@ ln -sfn /data/.openclaw /home/node/.openclaw 2>/dev/null || true
 ln -sfn /data/.openclaw /root/.openclaw 2>/dev/null || true
 
 # 3. Lean OpenClaw configuration: disables heavy plugins and stabilizes WebSockets
-cat << EOF > /data/.openclaw/openclaw.json
+cat << JSON_CONFIG > /data/.openclaw/openclaw.json
 {
   "gateway": {
     "mode": "local",
@@ -58,7 +58,7 @@ cat << EOF > /data/.openclaw/openclaw.json
     }
   }
 }
-EOF
+JSON_CONFIG
 
 # Copy config to /home/node as backup
 cp /data/.openclaw/openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
@@ -76,12 +76,12 @@ chmod -R 777 /data /home/node 2>/dev/null || true
   echo "=== OpenClaw Gateway is ONLINE and monitoring devices ==="
 
   while true; do
-    PENDING_UUIDS=\$(openclaw devices list 2>&1 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || true)
+    PENDING_UUIDS=$(openclaw devices list 2>&1 | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" || true)
     
-    for REQ in \$PENDING_UUIDS; do
-      if [ -n "\$REQ" ]; then
-        echo "⚡ Approving device request: \$REQ"
-        openclaw devices approve "\$REQ" 2>&1 || true
+    for REQ in $PENDING_UUIDS; do
+      if [ -n "$REQ" ]; then
+        echo "⚡ Approving device request: $REQ"
+        openclaw devices approve "$REQ" 2>&1 || true
       fi
     done
 
