@@ -20,7 +20,7 @@ mkdir -p /data/.openclaw/state /data/workspace /home/node/.openclaw
 ln -sfn /data/.openclaw /home/node/.openclaw 2>/dev/null || true
 ln -sfn /data/.openclaw /root/.openclaw 2>/dev/null || true
 
-# 3. Write gateway configuration with your NVIDIA models
+# 3. Write gateway configuration with NVIDIA models
 cat << JSON_CONFIG > /data/.openclaw/openclaw.json
 {
   "gateway": {
@@ -41,28 +41,28 @@ cat << JSON_CONFIG > /data/.openclaw/openclaw.json
   "agents": {
     "defaults": {
       "model": {
-        "primary": "nvidia/nemotron-3-super-120b-a12b",
+        "primary": "nvidia/nvidia/nemotron-3-super-120b-a12b",
         "fallbacks": [
-          "nvidia/nemotron-3-ultra-550b-a55b"
+          "nvidia/nvidia/nemotron-3-ultra-550b-a55b"
         ]
       },
       "models": {
-        "nvidia/nemotron-3-super-120b-a12b": {
+        "nvidia/nvidia/nemotron-3-super-120b-a12b": {
           "alias": "nemotron-super-120b"
         },
-        "nvidia/nemotron-3-ultra-550b-a55b": {
+        "nvidia/nvidia/nemotron-3-ultra-550b-a55b": {
           "alias": "nemotron-ultra-550b"
         },
-        "meta/muse-glimmer-30b": {
+        "nvidia/meta/muse-glimmer-30b": {
           "alias": "muse-glimmer-30b"
         },
-        "nvidia/nemotron-3.5-lightning-30b-a3b": {
+        "nvidia/nvidia/nemotron-3.5-lightning-30b-a3b": {
           "alias": "nemotron-lightning-30b"
         },
-        "deepseek-ai/deepseek-v4-flash-0731": {
+        "nvidia/deepseek-ai/deepseek-v4-flash-0731": {
           "alias": "deepseek-v4-flash"
         },
-        "moonshotai/kimi-k3": {
+        "nvidia/moonshotai/kimi-k3": {
           "alias": "kimi-k3"
         }
       }
@@ -124,7 +124,9 @@ cat << JSON_CONFIG > /data/.openclaw/openclaw.json
       "talk-voice",
       "ollama",
       "geolocation",
-      "linux-node"
+      "linux-node",
+      "meta",
+      "moonshot"
     ],
     "entries": {
       "memory-core": {
@@ -142,6 +144,9 @@ JSON_CONFIG
 # Copy config to /home/node as backup
 cp /data/.openclaw/openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
 chmod -R 777 /data /home/node 2>/dev/null || true
+
+# Pre-run headless repair to satisfy capability consent non-interactively
+openclaw update repair --accept-capabilities 2>/dev/null || true
 
 # 4. Background daemon: monitors pending UUIDs and approves them automatically
 (
