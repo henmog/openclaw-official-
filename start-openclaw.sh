@@ -16,7 +16,7 @@ echo "$TOKEN"
 echo "===================================================="
 
 # 2. Directory setup and path linking
-mkdir -p /data/.openclaw/state /data/workspace /home/node/.openclaw
+mkdir -p /data/.openclaw/state /data/workspace /home/node/.openclaw /tmp/openclaw
 ln -sfn /data/.openclaw /home/node/.openclaw 2>/dev/null || true
 ln -sfn /data/.openclaw /root/.openclaw 2>/dev/null || true
 
@@ -125,8 +125,9 @@ cat << JSON_CONFIG > /data/.openclaw/openclaw.json
       "ollama",
       "geolocation",
       "linux-node",
-      "meta",
-      "moonshot"
+      "anthropic",
+      "openai",
+      "xai"
     ],
     "entries": {
       "memory-core": {
@@ -141,36 +142,39 @@ cat << JSON_CONFIG > /data/.openclaw/openclaw.json
 }
 JSON_CONFIG
 
-# Copy config to /home/node as backup
 cp /data/.openclaw/openclaw.json /home/node/.openclaw/openclaw.json 2>/dev/null || true
-chmod -R 777 /data /home/node 2>/dev/null || true
+chmod -R 777 /data /home/node /tmp/openclaw 2>/dev/null || true
 
-# Pre-run headless repair to satisfy capability consent non-interactively
-openclaw update repair --accept-capabilities 2>/dev/null || true
-
-# 4. Background daemon: monitors pending UUIDs and approves them automatically
+# 4. Device Auto-Approval Daemon (Event-driven + 15s safety heartbeat)
 (
   set +e
-  echo "=== Device auto-approval daemon started ==="
-
   while ! curl -s http://127.0.0.1:10000/ >/dev/null 2>&1; do
     sleep 2
   done
 
-  echo "=== OpenClaw Gateway is ONLINE and monitoring devices ==="
+  echo "=== OpenClaw Gateway is ONLINE and device auto-approval is active ==="
 
-  while true; do
-    PENDING_UUIDS=$(openclaw devices list 2>&1 | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" || true)
-    
-    for REQ in $PENDING_UUIDS; do
-      if [ -n "$REQ" ]; then
-        echo "⚡ Approving device request: $REQ"
-        openclaw devices approve "$REQ" 2>&1 || true
+  # Immediate check upon boot
+  openclaw devices approve --latest 2>&1 || true
+
+  # Engine 1: Event-driven watcher via gateway logs (triggers instantly on new pairing attempts)
+  (
+    while true; do
+      LOGFILE=$(ls -t /tmp/openclaw/openclaw-*.log 2>/dev/null | head -n 1)
+      if [ -n "$LOGFILE" ] && [ -f "$LOGFILE" ]; then
+        tail -n 0 -F "$LOGFILE" 2>/dev/null | grep --line-buffered -iE "pairing|1008|device" | while read -r line; do
+          echo "⚡ Pairing event detected in log. Auto-approving..."
+          openclaw devices approve --latest 2>&1 || true
+        done
       fi
+      sleep 5
     done
+  ) &
 
+  # Engine 2: Periodic heartbeat safety net (every 15s) to guarantee no lockout
+  while true; do
+    sleep 15
     openclaw devices approve --latest 2>&1 || true
-    sleep 2
   done
 ) &
 
